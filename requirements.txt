@@ -1,0 +1,15 @@
+beepy==1.0.7
+certifi==2020.12.5
+chardet==4.0.0
+gevent==21.1.2
+greenlet==1.0.0
+grequests==0.6.0
+idna==2.10
+imageio==2.9.0
+numpy==1.19.5
+Pillow==8.1.0
+requests==2.25.1
+simpleaudio==1.0.4
+urllib3==1.26.2
+zope.event==4.5.0
+zope.interface==5.2.0
