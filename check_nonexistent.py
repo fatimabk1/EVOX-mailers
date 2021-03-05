@@ -23,8 +23,8 @@ def test(nonexistent, missing_colors):
     # vehicle = "2013 Lexus Gx 460"  # F, 350C
     # print(vehicle)
     # payload = get_payload(session, vehicle, makes)
-    payload = {'year': '2015', 'make': 'BMW'}
-    # payload = {'year': '2015', 'make': 'BMW', 'model': '5 Series'}
+    # payload = {'year': '2015', 'make': 'BMW'}
+    payload = {'year': '2012', 'make': 'Cadillac', 'model': 'Escalade Esv'}
 
     # vifnum check
     if check_vifnum:

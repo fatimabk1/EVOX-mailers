@@ -335,7 +335,7 @@ def make_image(resource, vin):
     img = imageio.imwrite(save_path, img_in, format=".jpg")
 
 def process(session, base, headers, makes):
-    with open('data.csv', 'r') as input:
+    with open('data/data.csv', 'r') as input:
         reader = csv.DictReader(input)
         nonexistent =  open('nonexistent.txt', 'a')
         multiple = open('multiple.txt', 'a')

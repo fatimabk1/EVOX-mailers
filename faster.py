@@ -1,16 +1,16 @@
 import csv
 import asyncio
-from socket import timeout
 from aiohttp import ClientSession, ClientTimeout, TCPConnector, DummyCookieJar
-import requests
+from multiprocessing import Process, Queue, Pipe
 import json
+import requests
 import traceback
 import imageio
-import random
-from datetime import datetime, timedelta
 import beepy
-from main import get_makes
 import config
+
+base = 'http://api.evoximages.com/api/v1'
+headers = {'x-api-key': config.api_key}
 
 
 class Vehicle:
@@ -24,18 +24,10 @@ class Vehicle:
         self.vif_result_object = None
         self.vifnum = 0
         self.productTypeId = None
-        self.code_to_color = None
-        self.color_to_code = None
+        self.code_to_color = {}
+        self.color_to_code = {}
         self.resources = None
         self.selected_resource = None
-
-def log():
-    return datetime.now()
-
-
-def delta(msg, start):
-    curr = datetime.now()
-    print(msg + "∆: ", curr - start)
 
 
 def get_payload(vehicle, makes):   
@@ -130,7 +122,6 @@ def get_payload(vehicle, makes):
         elif tok.lower() == "rx":
             model_toks[index] = "RX"
         elif tok.lower() == "gx":
-            print("found gx")
             model_toks[index] = "GX"
         elif tok.lower() == "es":
             model_toks[index] = "ES"
@@ -161,79 +152,105 @@ def handle_vif_match(vehicle):
     if len(matches) == 1:
         vehicle.vifnum = matches[0]['vifnum']
     else:
-        for match in matches:
-            found = True
-            match_str = match['vehicle_str'].lower()
-            for tok in vehicle.list_b:
-                if tok.lower() not in match_str:
-                    found = False
-            if found is True:
-                vehicle.vifnum = match['vifnum']
-                return
-        vehicle.vifnum = matches[0]['vifnum']
+        if len(vehicle.list_b) == 0:
+            vehicle.vifnum = matches[0]['vifnum']
+        else:
+            best_match = None
+            best_count = 0
+            for match in matches:
+                match_str = match['vehicle_str'].lower()
+                count = 0
+                for tok in vehicle.list_b:
+                    if tok.lower() in match_str:
+                        count += 1
+                if count > best_count:
+                    best_count = count
+                    best_match = match
+            if best_count == 0:
+
+                vehicle.vifnum = None
+            else:
+                vehicle.vifnum = best_match['vifnum']
 
 
+async def fetch(url, params, session):
+    retry = True
+    while retry is True: 
+        if params is not None:
+            async with session.get(url, params=params, headers=headers) as response:
+                result = await response.text()
+        else:
+            async with session.get(url, headers=headers) as response:
+                result = await response.text()
+        
+        # catch 504 Gateway Timeouts
+        try:
+            result = json.loads(result)
+            retry = False
+        except:
+            print(params)
+            if "504" in result.lower():
+                print("\tGOT ONE!!!! -- retrying next round")
+                retry = True
+            else:
+                print(result)
+                retry = False
+    return result
 
-async def fetch(url, params, headers, session):
-    if params is not None:
-        async with session.get(url, params=params, headers=headers) as response:
-            # data =  await response.read()
-            # return json.loads(data)
-            # return await response.body.decode('utf-8')
-            return await response.text()
 
-    else:
-        async with session.get(url, headers=headers) as response:
-            return await response.text()
+async def bound_fetch(sem, url, params, session):
+    # Getter function with semaphore.
+    async with sem:
+        return await fetch(url, params, session)
 
 
-async def fetch_all(urls, params, headers, loop):
+async def fetch_all(urls, params, loop):
     tasks = []
+    dummy_jar = DummyCookieJar()
     timeout = ClientTimeout(total=600)
     connector = TCPConnector(limit=40)
-    dummy_jar = DummyCookieJar()
+    sem = asyncio.Semaphore(1000)
+
+    # async with ClientSession(loop=loop, timeout=timeout, cookie_jar=dummy_jar) as session:
     async with ClientSession(loop=loop, connector=connector, timeout=timeout, cookie_jar=dummy_jar) as session:
         if params is None:
             print("NO params")
             for u in urls:
-                task = asyncio.ensure_future(fetch(u, headers, session))
+                task = asyncio.ensure_future(bound_fetch(sem, u, None, session))
                 tasks.append(task)
         else:
             print("YES params")
             for index, u in enumerate(urls):
-                task = asyncio.ensure_future(fetch(u, params[index], headers, session))
+                task = asyncio.ensure_future(bound_fetch(sem, u, params[index], session))
                 tasks.append(task)
         results = await asyncio.gather(*tasks)
         print("\tresults gathered")
+        for r in results:
+            assert(r is not None)
         return results
 
-async def test(headers):
-    url = base + '/vehicles'
-    payload = {'year': '2013', 'make': 'Lexus', 'model': 'GX'}
-    print("fetch() with response.read()")
-    async with ClientSession() as session:
-        return await fetch(url, payload, headers, session)
 
-
-def get_vifnums(base, headers, vehicles):
+def get_vifnums(vehicles):
     # FETCH ALL
     url = base + '/vehicles'
     url_list = [url for v in vehicles]
     payload_list = [v.payload for v in vehicles]
     loop = asyncio.get_event_loop()
-    results = loop.run_until_complete(fetch_all(url_list, payload_list, headers, loop))
-    vifnum_results = [json.loads(r) for r in results]
+    vifnum_results = loop.run_until_complete(fetch_all(url_list, payload_list, loop))
  
+    # handle vehicles with matches
     for i, vehicle in enumerate(vehicles):
         vehicle.vif_result_object = vifnum_results[i]
-        # print(json.dumps(vifnum_results[i].json(), indent=4))
+        # print(vifnum_results[i])
+        assert('statusCode' in vifnum_results[i]), print(vehicle.vif_result_object)
         if vifnum_results[i]['statusCode'] == 200:
             handle_vif_match(vehicle)
 
-    # try less specific versions of vehicle until we find a match
+    # try less specific models until we find a match
     fail_list = [v for v in vehicles if v.vifnum == 0]
     print("\n\n failed vehicles:")
     for v in fail_list:
+        assert(v is not None)
         print(v.string)
         print("\t", v.payload)
     print("\n")
@@ -242,8 +259,11 @@ def get_vifnums(base, headers, vehicles):
         # update payload
         for v in fail_list:
             if len(v.list_a) == 0:
-                vehicle.vifnum = None
-                fail_list.remove(vehicle)
+                print(v.string)
+                print("\t", v.payload)
+                print("\t>>>>>>>> CONFIRMED FAILURE")
+                v.vifnum = None
+                fail_list.remove(v)
             else:
                 tok = v.list_a.pop()
                 v.list_b.insert(0, tok)
@@ -253,14 +273,14 @@ def get_vifnums(base, headers, vehicles):
         url_list = [url for v in fail_list]
         payload_list = [v.payload for v in fail_list]
         loop = asyncio.get_event_loop()
-        results = loop.run_until_complete(fetch_all(url_list, payload_list, headers, loop))
-        vifnum_results = [json.loads(r) for r in results]
-
+        vifnum_results = loop.run_until_complete(fetch_all(url_list, payload_list, loop))
 
         for i, vehicle in enumerate(fail_list):
             vehicle.vif_result_object = vifnum_results[i]
+            assert('statusCode' in vifnum_results[i]), print(vehicle.vif_result_object)
             if vifnum_results[i]['statusCode'] == 200:
                 handle_vif_match(vehicle)
+
         fail_list = [v for v in vehicles if v.vifnum == 0]
 
         print("\n\n failed vehicles:")
@@ -271,26 +291,36 @@ def get_vifnums(base, headers, vehicles):
     
     for v in vehicles:
         assert(v.vifnum != 0)
-    print("\nsuccessful vifnum extraction ~")
-    exit(0)
 
 
-def get_colors(base, vehicles):
+def get_colors(vehicles):
+    for v in vehicles:
+        assert(v is not None)
+
     color_pool = ["White", "Silver", "Blue", "Black", "Gray"]
     urls = [base + '/vehicles/' + str(v.vifnum) + '/colors' for v in vehicles]
-    rs = (grequests.get(u, headers=headers) for u in urls)
-    vifnum_results = grequests.map(rs)
+    loop = asyncio.get_event_loop()
+    color_results = loop.run_until_complete(fetch_all(urls, None, loop))
 
-    for i, vehicle in enumerate(vehicles):
-        colors = vifnum_results[i]['data']['colors']
+    for index, v in enumerate(vehicles):
+        colors = color_results[index]['data']['colors']
         for item in colors:
             clr = item['simpletitle']
             if clr in color_pool:
-                vehicle.color_to_code[clr] = item['code']
-                vehicle.code_to_color[item['code']] = clr
+                v.color_to_code[clr] = item['code']
+                v.code_to_color[item['code']] = clr
+    for v in vehicles:
+        assert(v.color_to_code is not None)
+        assert(v.code_to_color is not None)
+    print("\n\nCOLORS:")
+    for v in vehicles:
+        print(v.string)
+        for clr in v.color_to_code:
+            print("\t", clr)
+        print("\n")
 
 
-def get_resource_urls(base, vehicles):
+def get_resource_urls(vehicles):
     for v in vehicles:
         if int(v.payload['year']) < 2007:
             v.productTypeId = '235'
@@ -298,99 +328,145 @@ def get_resource_urls(base, vehicles):
             v.productTypeId = '237'
 
     urls = [base + '/vehicles/' + str(v.vifnum) + '/products/29/' + str(v.productTypeId) for v in vehicles]
-    rs = (grequests.get(u, headers=headers) for u in urls)
-    resource_results = grequests.map(rs)
+    loop = asyncio.get_event_loop()
+    resource_results = loop.run_until_complete(fetch_all(urls, None, loop))
+
+    print(json.dumps(resource_results[0], indent=4))
 
     for i, vehicle in enumerate(vehicles):
-        if resource_results[i].status_code != 200:
-            print(">>> no stills for : ", vehicle.payload)
+        if resource_results[i]['status'] != "success":
+            print(">>> no stills for : ", vehicle.payload, ", vifnum: ", vehicle.vifnum)
         else:
-            vehicle.resources = resource_results[i].json()['urls']
+            vehicle.resources = resource_results[i]['urls']
+    
+    print("\n\nRESOURCES:")
+    for v in vehicles:
+        print(v.string)
+        for url in v.resources:
+            print("\t", url)
+        print("\n")        
 
 
 def select_resources(vehicle):
+    print("in select_resource()")
     if vehicle.resources is None:
         vehicle.selected_resource = 'sillhouette.jpg'
         return
 
     resource_urls =  vehicle.resources
+    assert(len(resource_urls) > 0)
     color_to_code = vehicle.color_to_code
     code_to_color = vehicle.code_to_color
-    
 
-    main_count = 0
-    general_count = 0
-    possible_images = {}
-    images = [None, None, None]
+    # print("> vehicle: ", vehicle.string)
+    # print("> color_to_code: ", vehicle.color_to_code)
+    # print("> code_to_color: ", vehicle.code_to_color)
+    # print("> vehicle: ", vehicle.string)
+    # print("> urls:")
+    for url in vehicle.resources:
+        print("\t>", url)
 
     codes = list(color_to_code.values())
     code_start = len(resource_urls[0]) - 4 - len(codes[0])
     code_end = len(resource_urls[0]) - 4
 
-
     pos_one_pref = {'Blue': 5, 'Black': 4, 'Gray': 3, 'Silver': 2, 'White': 1 }
     pos_two_pref = {'White': 5, 'Black': 4, 'Gray': 3, 'Blue': 2, 'Silver': 1 }
-    pos_three_pref = {'Silver': 5, 'Gray': 4, 'Black': 3, 'White': 2, 'Silver': 1 }
+    pos_three_pref = {'Silver': 5, 'Gray': 4, 'Black': 3, 'White': 2, 'Blue': 1 }
     preferences = [pos_one_pref, pos_two_pref, pos_three_pref]
 
     pref = preferences[vehicle.position - 1]
     priority = 0
-
     for resource in resource_urls:
         code = resource[code_start:code_end]
+        if code not in code_to_color:
+            continue
         color = code_to_color[code]
         if pref[color] > priority:
             priority = pref[color]
             vehicle.selected_resource = resource
 
-def make_image(vehicle):
-    save_path = "images/" + str(vehicle.vin) + ".jpg"
-    print("vehicle.resource: " + vehicle.resource)
-    img_in = imageio.imread(imageio.core.urlopen(vehicle.resource).read(), '.jpg')
-    img = imageio.imwrite(save_path, img_in, format=".jpg")
+
+def reader(pipe):
+    p_in, p_out = pipe
+    p_in.close()
+    while True:
+        img = p_out.recv()
+        if img == "DONE":
+            break
+        else:
+            # print(img)
+            imageio.imwrite(img[1], img[0], format=".jpg")
+
+def writer(p_in, vehicles):
+    for v in vehicles:
+        print("\tsending")
+        save_path = "images/" + str(v.vin) + ".jpg"
+        if v.selected_resource is None:
+            v.selected_resource = 'sillhouette.jpg'
+            p_in.send([imageio.imread(v.selected_resource, '.jpg'), save_path])
+        else:
+            p_in.send([imageio.imread(imageio.core.urlopen(v.selected_resource).read(), '.jpg'), save_path])
+        # p_in.send(v.vin)
+    p_in.send("DONE")
 
 
-def get_makes(base, headers):
+def pipe_make_images(vehicles):
+    p_in, p_out = Pipe()
+    reader_proc = Process(target=reader, args=((p_in, p_out), ))
+    reader_proc.daemon = True
+    reader_proc.start()
+    p_out.close()
+    writer(p_in, vehicles)
+    p_in.close()
+    reader_proc.join()
+
+
+def get_makes():
     url = base + '/makes/'
-    t = log()
     r = requests.get(url, headers=headers, timeout=10)
-    delta("\tdb query makes", t)
+    print(r)
     assert(r.status_code == 200)
     makes = r.json()['data']
     return makes
 
 
-
-def process(base, headers):
-    with open('data.csv', 'r') as input:
+def process():
+    with open('data/test_data.csv', 'r') as input:
         reader = csv.DictReader(input)
         vehicles = []
         for row in reader:
-            if row["VIN1"] is not None:
+            if row["VIN1"] is not "":
                 v = Vehicle(row["VIN1"], row["Vehicle1"], 1)
                 vehicles.append(v)
-            elif row["VIN2"] is not None:
+
+            if row["VIN2"] is not "":
                 v = Vehicle(row["VIN2"], row["Vehicle2"], 2)
                 vehicles.append(v)
-            elif row["VIN3"] is not None:
+
+            if row["VIN3"] is not "":
                 v = Vehicle(row["VIN3"], row["Vehicle3"], 3)
                 vehicles.append(v)
+        
+        for v in vehicles:
+            print(v.string)
+        print("\n")
 
-        makes = get_makes(base, headers)
+        makes = get_makes()
         [get_payload(v, makes) for v in vehicles]  # sets list_a, list_b and payload for each vehicle
-        # print("\n\n\n vehicle saved payloads")
-        # [print(v.payload) for v in vehicles]
-        get_vifnums(base, headers, vehicles)
-        get_colors(base, vehicles)
-        get_resource_urls(base, vehicles)
-        select_resources(base, vehicles)
-        map(make_image, vehicles)
+        get_vifnums(vehicles)
+        for v in vehicles:
+            assert(v is not None)
+        get_colors(vehicles)
+        get_resource_urls(vehicles)
+        [select_resources(v) for v in vehicles]
+        [print(v.string, ": ", v.selected_resource) for v in vehicles]
+        pipe_make_images(vehicles)
 
 
 if __name__ == "__main__":
     # TODO: get API key from env variable to ensure security
-    base = 'http://api.evoximages.com/api/v1'
-    headers = {'x-api-key': config.api_key}
+    
     # session = requests.Session()
     # session.headers.update(headers)
 
@@ -398,7 +474,7 @@ if __name__ == "__main__":
     print("\n-----------------------------------------------\n")
 
     try:
-        process(base, headers)
+        process()
         beepy.beep(sound=5)
     except Exception as e:
         beepy.beep(sound=3)
