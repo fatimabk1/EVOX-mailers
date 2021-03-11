@@ -1,16 +1,23 @@
 import csv
 import asyncio
-from aiohttp import ClientSession, ClientTimeout, TCPConnector, DummyCookieJar
-from multiprocessing import Process, Queue, Pipe
+from main import log, delta
+from datetime import datetime
+# from aiohttp import ClientSession, ClientTimeout, TCPConnector, DummyCookieJar
+from multiprocessing import Process, Pipe
 import json
 import requests
 import traceback
+import time
 import imageio
 import beepy
 import config
+import clientFetch
+# import pypeln as pl
 
 base = 'http://api.evoximages.com/api/v1'
 headers = {'x-api-key': config.api_key}
+err504 = open('504_errors.txt', 'w')
+err1040 = open('1040_errors.txt', 'w')
 
 
 class Vehicle:
@@ -19,15 +26,20 @@ class Vehicle:
         self.vin = vin
         self.string = string
         self.payload = None
+        self.model_toks = None
         self.list_a = None
         self.list_b = None
         self.vif_result_object = None
-        self.vifnum = 0
+        self.vifnum = 0  # set to None if no matching vehicle in database
         self.productTypeId = None
         self.code_to_color = {}
         self.color_to_code = {}
         self.resources = None
         self.selected_resource = None
+    
+    def print(self):
+        print("<pos={}, payload={}, vifnum={}, string={}".format(self.position, self.payload, self.vifnum, self.string),
+              "\tmodel_toks={}, code_dict={}, color_dict={}>".format(self.model_toks, self.code_to_color, self.color_to_code))
 
 
 def get_payload(vehicle, makes):   
@@ -107,8 +119,8 @@ def get_payload(vehicle, makes):
             number = model_toks[1]
             model_toks[1] = classic 
             model_toks[2] = number 
-        elif model_toks[2].lower() == "coupe":
-            model_toks[2] = "Coupe"   
+        # elif model_toks[2].lower() == "coupe":
+        #     model_toks[2] = "Coupe"   
         elif model_toks[1].lower() == "super" and model_toks[2].lower() == "duty":
             del model_toks[2]
             model_toks[1] = "SD"
@@ -117,19 +129,19 @@ def get_payload(vehicle, makes):
 
     model = ""
     for index, tok in enumerate(model_toks):
-        if tok.lower() == "is":
-            model_toks[index] = "IS"
-        elif tok.lower() == "rx":
-            model_toks[index] = "RX"
-        elif tok.lower() == "gx":
-            model_toks[index] = "GX"
-        elif tok.lower() == "es":
-            model_toks[index] = "ES"
-        elif tok.lower() == "gtc":
-            model_toks[index] = "GTC"
+        # if tok.lower() == "is":
+        #     model_toks[index] = "IS"
+        # elif tok.lower() == "rx":
+        #     model_toks[index] = "RX"
+        # elif tok.lower() == "gx":
+        #     model_toks[index] = "GX"
+        # elif tok.lower() == "es":
+        #     model_toks[index] = "ES"
+        # elif tok.lower() == "gtc":
+        #     model_toks[index] = "GTC"
         # elif tok.lower() == "pickup":
         #     continue
-        elif "hd" in tok.lower():
+        if "hd" in tok.lower():
             strlen = len(tok)
             tok = tok[:strlen - 2]
             # if make.lower() == "gmc":
@@ -139,185 +151,141 @@ def get_payload(vehicle, makes):
         
     # print("model = ", model_toks)
     payload = {'year': year,
-               'make': make,
-               'model': ' '.join(model_toks)}
+               'make': make}
+            #    'model': ' '.join(model_toks)}
     # print(payload)
     vehicle.payload = payload
-    vehicle.list_a = model_toks
-    vehicle.list_b = []
+    # vehicle.list_a = model_toks
+    # vehicle.list_b = []
+    vehicle.model_toks = model_toks
 
 
 def handle_vif_match(vehicle):
     matches = vehicle.vif_result_object['data']
-    if len(matches) == 1:
-        vehicle.vifnum = matches[0]['vifnum']
+    # if len(matches) == 1:
+    #     vehicle.vifnum = matches[0]['vifnum']
+    # else:
+    #     if len(vehicle.list_b) == 0:
+    #         vehicle.vifnum = matches[0]['vifnum']
+    #     else:
+    best_match = None
+    best_count = 0
+    for match in matches:
+        match_str = match['vehicle_str'].lower()
+        count = 0
+        # for tok in vehicle.list_b:
+        for tok in vehicle.model_toks:
+            if tok.lower() in match_str:
+                count += 1
+        if count > best_count:
+            best_count = count
+            best_match = match
+    if best_count == 0:
+        vehicle.vifnum = None
     else:
-        if len(vehicle.list_b) == 0:
-            vehicle.vifnum = matches[0]['vifnum']
-        else:
-            best_match = None
-            best_count = 0
-            for match in matches:
-                match_str = match['vehicle_str'].lower()
-                count = 0
-                for tok in vehicle.list_b:
-                    if tok.lower() in match_str:
-                        count += 1
-                if count > best_count:
-                    best_count = count
-                    best_match = match
-            if best_count == 0:
-
-                vehicle.vifnum = None
-            else:
-                vehicle.vifnum = best_match['vifnum']
-
-
-async def fetch(url, params, session):
-    retry = True
-    while retry is True: 
-        if params is not None:
-            async with session.get(url, params=params, headers=headers) as response:
-                result = await response.text()
-        else:
-            async with session.get(url, headers=headers) as response:
-                result = await response.text()
-        
-        # catch 504 Gateway Timeouts
-        try:
-            result = json.loads(result)
-            retry = False
-        except:
-            print(params)
-            if "504" in result.lower():
-                print("\tGOT ONE!!!! -- retrying next round")
-                retry = True
-            else:
-                print(result)
-                retry = False
-    return result
-
-
-async def bound_fetch(sem, url, params, session):
-    # Getter function with semaphore.
-    async with sem:
-        return await fetch(url, params, session)
-
-
-async def fetch_all(urls, params, loop):
-    tasks = []
-    dummy_jar = DummyCookieJar()
-    timeout = ClientTimeout(total=600)
-    connector = TCPConnector(limit=40)
-    sem = asyncio.Semaphore(1000)
-
-    # async with ClientSession(loop=loop, timeout=timeout, cookie_jar=dummy_jar) as session:
-    async with ClientSession(loop=loop, connector=connector, timeout=timeout, cookie_jar=dummy_jar) as session:
-        if params is None:
-            print("NO params")
-            for u in urls:
-                task = asyncio.ensure_future(bound_fetch(sem, u, None, session))
-                tasks.append(task)
-        else:
-            print("YES params")
-            for index, u in enumerate(urls):
-                task = asyncio.ensure_future(bound_fetch(sem, u, params[index], session))
-                tasks.append(task)
-        results = await asyncio.gather(*tasks)
-        print("\tresults gathered")
-        for r in results:
-            assert(r is not None)
-        return results
+        vehicle.vifnum = best_match['vifnum']
 
 
 def get_vifnums(vehicles):
-    # FETCH ALL
+    # fetch all
     url = base + '/vehicles'
-    url_list = [url for v in vehicles]
-    payload_list = [v.payload for v in vehicles]
+    fetches = [[url, v.payload] for v in vehicles]
     loop = asyncio.get_event_loop()
-    vifnum_results = loop.run_until_complete(fetch_all(url_list, payload_list, loop))
+    vifnum_results = loop.run_until_complete(clientFetch.fetch_all(fetches, loop))
  
     # handle vehicles with matches
     for i, vehicle in enumerate(vehicles):
         vehicle.vif_result_object = vifnum_results[i]
-        # print(vifnum_results[i])
-        assert('statusCode' in vifnum_results[i]), print(vehicle.vif_result_object)
+        assert('statusCode' in vifnum_results[i]), print(vifnum_results[i])
         if vifnum_results[i]['statusCode'] == 200:
             handle_vif_match(vehicle)
 
-    # try less specific models until we find a match
-    fail_list = [v for v in vehicles if v.vifnum == 0]
-    print("\n\n failed vehicles:")
-    for v in fail_list:
-        assert(v is not None)
-        print(v.string)
-        print("\t", v.payload)
-    print("\n")
+    miss_list = [v for v in vehicles if v.vifnum == 0]
+    print("len(miss_list) = ", len(miss_list))
+    for v in miss_list:
+        print(v.string, " | ", v.payload)
+        print("\t>>>>> Confirmed vehicle not in database")
+        v.vifnum = None
 
-    while len(fail_list) != 0:
-        # update payload
-        for v in fail_list:
-            if len(v.list_a) == 0:
-                print(v.string)
-                print("\t", v.payload)
-                print("\t>>>>>>>> CONFIRMED FAILURE")
-                v.vifnum = None
-                fail_list.remove(v)
-            else:
-                tok = v.list_a.pop()
-                v.list_b.insert(0, tok)
-                v.payload['model'] = ' '.join(v.list_a)
-        
-        # query again
-        url_list = [url for v in fail_list]
-        payload_list = [v.payload for v in fail_list]
-        loop = asyncio.get_event_loop()
-        vifnum_results = loop.run_until_complete(fetch_all(url_list, payload_list, loop))
-
-        for i, vehicle in enumerate(fail_list):
-            vehicle.vif_result_object = vifnum_results[i]
-            assert('statusCode' in vifnum_results[i]), print(vehicle.vif_result_object)
-            if vifnum_results[i]['statusCode'] == 200:
-                handle_vif_match(vehicle)
-
-        fail_list = [v for v in vehicles if v.vifnum == 0]
-
-        print("\n\n failed vehicles:")
-        for v in fail_list:
-            print(v.string)
-            print("\t", v.payload)
-        print("\n")
-    
+    # confirm that all vehicles have been handled
     for v in vehicles:
         assert(v.vifnum != 0)
+    print("\n>>>>> Sucessfully pulled all vifnums! <<<<<\n")
+    beepy.beep(sound=1)
+
+    # START HERE >>>
+    # 1. Check for vehicle_str in cache  # SKIP
+    # 2. Pull {year, make} & loop through vehicle_strings for best match w/model tokens list
+    # 3. Add {(year, make) --> data_list} to cache lookup  # SKIP
+    # 4. Add caching {vehicle_string --> vifnum}  # SKIP
+
+    # try less specific models until we find a match
+    # while True:
+    #     miss_list = [v for v in vehicles if v.vifnum == 0]
+    #     for v in miss_list:
+    #         if len(v.list_a) == 0:
+    #             print("\t", v.payload)
+    #             print("\t>>>>>>>> CONFIRMED FAILURE")
+    #             v.vifnum = None
+    #             miss_list.remove(v)
+    #         else:
+    #             tok = v.list_a.pop()
+    #             v.list_b.insert(0, tok)
+    #             v.payload['model'] = ' '.join(v.list_a)
+
+    #     if len(miss_list) == 0:
+    #         break
+
+    #     # query again
+    #     fetches = [[url, v.payload] for v in miss_list]
+    #     print("len(miss_list): ", len(miss_list))
+    #     print("# fetches: ", len(fetches))
+    #     loop = asyncio.get_event_loop()
+    #     print("trying again with {} vehicles".format(len(miss_list)))
+    #     vifnum_results = loop.run_until_complete(clientFetch.fetch_all(fetches, loop))
+    #     assert(len(vifnum_results) == len(miss_list))
+
+    #     # handle vehicles with matches
+    #     for i, vehicle in enumerate(miss_list):
+    #         vehicle.vif_result_object = vifnum_results[i]
+    #         assert('statusCode' in vifnum_results[i]), print("vifnum result: [{}]".format(vifnum_results[i]))
+    #         if vifnum_results[i]['statusCode'] == 200:
+    #             handle_vif_match(vehicle)
 
 
 def get_colors(vehicles):
     for v in vehicles:
         assert(v is not None)
 
-    color_pool = ["White", "Silver", "Blue", "Black", "Gray"]
-    urls = [base + '/vehicles/' + str(v.vifnum) + '/colors' for v in vehicles]
+    # urls = [base + '/vehicles/' + str(v.vifnum) + '/colors' for v in vehicles]
+    fetches = [[base + '/vehicles/' + str(v.vifnum) + '/colors', None]
+                for v in vehicles
+                if v.vifnum is not None]
     loop = asyncio.get_event_loop()
-    color_results = loop.run_until_complete(fetch_all(urls, None, loop))
+    color_results = loop.run_until_complete(clientFetch.fetch_all(fetches, loop))
 
-    for index, v in enumerate(vehicles):
+    # START >>>> NONE VIFNUMS, fetch colors enumerate vehicles mismatch
+    index = 0
+    for v in vehicles:
+        if v.vifnum is None:
+            continue
         colors = color_results[index]['data']['colors']
+        print("Colors:", v.string)
+        [print("\t", clr['simpletitle'], clr['code']) for clr in colors]
         for item in colors:
             clr = item['simpletitle']
-            if clr in color_pool:
-                v.color_to_code[clr] = item['code']
-                v.code_to_color[item['code']] = clr
+            # TODO: remove check for colors in color_pool, collect all
+            v.color_to_code[clr] = item['code']
+            v.code_to_color[item['code']] = clr
+        index += 1
+        print("\n ---------------------------")
     for v in vehicles:
-        assert(v.color_to_code is not None)
-        assert(v.code_to_color is not None)
-    print("\n\nCOLORS:")
-    for v in vehicles:
-        print(v.string)
-        for clr in v.color_to_code:
-            print("\t", clr)
-        print("\n")
+        if v.vifnum is None:
+            continue
+        assert(len(v.color_to_code) != 0), v.print()
+        assert(len(v.code_to_color) != 0), v.print()
+    print("\n>>>>> Sucessfully pulled all colors! <<<<<\n")
+    beepy.beep(sound=1)
 
 
 def get_resource_urls(vehicles):
@@ -327,30 +295,36 @@ def get_resource_urls(vehicles):
         else:
             v.productTypeId = '237'
 
-    urls = [base + '/vehicles/' + str(v.vifnum) + '/products/29/' + str(v.productTypeId) for v in vehicles]
+    fetches = [[base + '/vehicles/' + str(v.vifnum) + '/products/29/' + str(v.productTypeId), None] 
+                for v in vehicles
+                if v.vifnum is not None]
     loop = asyncio.get_event_loop()
-    resource_results = loop.run_until_complete(fetch_all(urls, None, loop))
+    resource_results = loop.run_until_complete(clientFetch.fetch_all(fetches, loop))
 
-    print(json.dumps(resource_results[0], indent=4))
-
-    for i, vehicle in enumerate(vehicles):
-        if resource_results[i]['status'] != "success":
-            print(">>> no stills for : ", vehicle.payload, ", vifnum: ", vehicle.vifnum)
+    index = 0
+    for vehicle in vehicles:
+        if vehicle.vifnum is None:
+            continue
         else:
-            vehicle.resources = resource_results[i]['urls']
-    
+            if resource_results[index]['status'] != "success":
+                print(">>> no stills for : ", vehicle.payload, ", vifnum: ", vehicle.vifnum)
+            else:
+                vehicle.resources = resource_results[index]['urls']
+            index += 1
+
     print("\n\nRESOURCES:")
     for v in vehicles:
         print(v.string)
-        for url in v.resources:
-            print("\t", url)
-        print("\n")        
+        if v.resources is not None:
+            for url in v.resources:
+                print("\t", url)
+        print("\n")
+    print("\n>>>>> Sucessfully pulled all resources! <<<<<\n")
+    beepy.beep(sound=1)
 
 
 def select_resources(vehicle):
-    print("in select_resource()")
     if vehicle.resources is None:
-        vehicle.selected_resource = 'sillhouette.jpg'
         return
 
     resource_urls =  vehicle.resources
@@ -361,12 +335,13 @@ def select_resources(vehicle):
     # print("> vehicle: ", vehicle.string)
     # print("> color_to_code: ", vehicle.color_to_code)
     # print("> code_to_color: ", vehicle.code_to_color)
-    # print("> vehicle: ", vehicle.string)
+    print("> vehicle: ", vehicle.string)
     # print("> urls:")
     for url in vehicle.resources:
         print("\t>", url)
 
     codes = list(color_to_code.values())
+    print("codes: ", codes)
     code_start = len(resource_urls[0]) - 4 - len(codes[0])
     code_end = len(resource_urls[0]) - 4
 
@@ -375,6 +350,8 @@ def select_resources(vehicle):
     pos_three_pref = {'Silver': 5, 'Gray': 4, 'Black': 3, 'White': 2, 'Blue': 1 }
     preferences = [pos_one_pref, pos_two_pref, pos_three_pref]
 
+    # START >>>>
+    # TODO: situation where none of preferred colors available -- random color or silhouette image?
     pref = preferences[vehicle.position - 1]
     priority = 0
     for resource in resource_urls:
@@ -420,6 +397,8 @@ def pipe_make_images(vehicles):
     writer(p_in, vehicles)
     p_in.close()
     reader_proc.join()
+    print("\n>>>>> Sucessfully created all images! <<<<<\n")
+    beepy.beep(sound=1)
 
 
 def get_makes():
@@ -432,7 +411,7 @@ def get_makes():
 
 
 def process():
-    with open('data/test_data.csv', 'r') as input:
+    with open('data/data.csv', 'r') as input:
         reader = csv.DictReader(input)
         vehicles = []
         for row in reader:
@@ -448,20 +427,31 @@ def process():
                 v = Vehicle(row["VIN3"], row["Vehicle3"], 3)
                 vehicles.append(v)
         
-        for v in vehicles:
-            print(v.string)
-        print("\n")
-
+       
         makes = get_makes()
-        [get_payload(v, makes) for v in vehicles]  # sets list_a, list_b and payload for each vehicle
-        get_vifnums(vehicles)
-        for v in vehicles:
-            assert(v is not None)
-        get_colors(vehicles)
-        get_resource_urls(vehicles)
-        [select_resources(v) for v in vehicles]
-        [print(v.string, ": ", v.selected_resource) for v in vehicles]
+        # batches = [vehicles[x:x+1000] for x in range(0, len(vehicles), 100)]
+        progress = 0
+        # for vehicle_batch in batches:
+        t = log()
+        [get_payload(v, makes) for v in vehicles]  # model_toks and payload for each vehicle
+
+        unavailable_vehicles = [v for v in vehicles if int(v.payload['year']) < 1999]
+        available_vehicles = [v for v in vehicles if v not in unavailable_vehicles]
+
+        get_vifnums(available_vehicles)
+        get_colors(available_vehicles)
+        get_resource_urls(available_vehicles)
+        [select_resources(v) for v in available_vehicles]
+        print("\n>>>>> Sucessfully selected resource! <<<<<\n")
+        beepy.beep(sound=1)
+
         pipe_make_images(vehicles)
+        progress += len(vehicles)
+        now = datetime.now()
+        diff = t - now
+        print("\n-------------- SUCCESS {}/{} : ∆{} ---------------".format(progress, len(vehicles), diff))
+        beepy.beep(sound=5)
+        time.sleep(3)
 
 
 if __name__ == "__main__":
@@ -475,8 +465,12 @@ if __name__ == "__main__":
 
     try:
         process()
+        err504.close()
+        err1040.close()
         beepy.beep(sound=5)
     except Exception as e:
+        err504.close()
+        err1040.close()
         beepy.beep(sound=3)
         traceback.print_exc()
         print(e)
