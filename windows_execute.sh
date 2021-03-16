@@ -1,4 +1,4 @@
 #!/bin/bash
-.\env\Scripts\activate mailers_env
+.\mailers_env\Scripts\activate
 python3 main.py
-.\env\Scripts\deactivate mailers_env
+.\mailers_env\Scripts\deactivate

@@ -11,8 +11,9 @@
 6. On the first time you run this program on a device, run the following:
     # ON MAC
     run './mac_setup.sh'
+    run 'chmod -R 777 ./'
     # ON WINDOWS
     run './windows_setup.sh'
 
-7. Every time you run this program, run './execute.sh'
+7. Every time you run this program, run './mac_execute.sh' or './windows_execute.sh' based on your device.
 8. All images will be saved in the 'images/' folder in the format {vin}.jpg

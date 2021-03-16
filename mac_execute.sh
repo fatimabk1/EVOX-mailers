@@ -1,5 +1,5 @@
 #!/bin/bash
 
-source env/bin/activate mailers_env
+source mailers_env/bin/activate
 python3 main.py
-source env/bin/deactivate mailers_env
+source mailers_env/bin/deactivate 

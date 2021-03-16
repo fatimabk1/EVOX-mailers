@@ -3,7 +3,6 @@ import asyncio
 from datetime import datetime
 import requests
 import traceback
-import beepy
 import config
 import clientFetch
 import output_check
@@ -417,6 +416,5 @@ if __name__ == "__main__":
         err_vehicle.close()
         err_resource.close()
         print("Process Failed.")
-        beepy.beep(sound=3)
         traceback.print_exc()
         print(e)
