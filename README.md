@@ -10,8 +10,8 @@
 
 6. On the first time you run this program on a device, run the following:
     # ON MAC
-    run './mac_setup.sh'
     run 'chmod -R 777 ./'
+    run './mac_setup.sh'
     # ON WINDOWS
     run './windows_setup.sh'
 
