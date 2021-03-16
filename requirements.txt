@@ -1,4 +1,8 @@
+aiofiles==0.6.0
 aiohttp==3.7.4
+aiojson==0.3.1612466996
+alive-progress==1.6.2
+animation==0.0.6
 async-timeout==3.0.1
 attrs==20.3.0
 beepy==1.0.7
