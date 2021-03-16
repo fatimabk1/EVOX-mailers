@@ -1,7 +1,6 @@
 import csv
 from os import listdir
 from os.path import isfile, join
-import beepy
 
 
 def check():
@@ -36,10 +35,8 @@ def check():
 
     if success:
         print("\n-------------- SUCCESS: {}/{} images match expected output ---------------".format(actual_count, expected_count))
-        beepy.beep(sound=5)
     else:
         print("\n-------------- FAILURE: unexpected or missing image(s) ---------------")
-        beepy.beep(sound=3)
 
 if __name__ == '__main__':
     check()

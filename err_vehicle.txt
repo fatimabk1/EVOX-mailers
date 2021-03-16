@@ -1,0 +1,4 @@
+INVALID MAKE: 1996 Eagle Talon
+INVALID MAKE: 1993 Eagle Talon
+INVALID MAKE: 1993 Eagle Vision
+INVALID MAKE: 1989 Geo Spectrum

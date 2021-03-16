@@ -1,18 +1,14 @@
 import csv
 import asyncio
-from datetime import date, datetime, timedelta
-from multiprocessing import Process, Pipe
+from datetime import datetime
 import requests
 import traceback
-import time
-import imageio
 import beepy
 import config
 import clientFetch
 import output_check
 import process_image
 import animation
-# from alive_progress import alive_bar
 
 base = 'http://api.evoximages.com/api/v1'
 err_vehicle = open('err_vehicle.txt', 'w')
@@ -230,10 +226,6 @@ def get_payload(vehicle, makes):
 
 @animation.wait(animation='spinner', text='\nCollecting color options ')
 def get_colors(vehicles):
-    # for v in vehicles:
-    #     assert(v is not None)
-    # print("Collecting color options")
-
     fetches = [[base + '/vehicles/' + str(v.vifnum) + '/colors', None]
                 for v in vehicles
                 if v.vifnum is not None]
@@ -255,8 +247,6 @@ def get_colors(vehicles):
                 v.code_to_color[item['code']] = clr
         v.code_len = len(colors[0]['code'])
         index += 1
-
-    # beepy.beep(sound=1)
 
 
 @animation.wait(animation='spinner', text='\nCollecting image urls ')
@@ -283,9 +273,6 @@ def get_resource_urls(vehicles):
             else:
                 vehicle.resources = resource_results[index]['urls']
             index += 1
-
-    # beepy.beep(sound=1)
-
 
 def select_resources(vehicle):
     if vehicle.resources is None:
@@ -372,8 +359,7 @@ def get_vehicle_matches(vehicles):
 
 def process():
     t = datetime.now()
-    # print(f"Start: {t.hour}:{t.minute}:{t.second}")
-    with open('data/large_data.csv', 'r') as input:
+    with open('data/data.csv', 'r') as input:
         reader = csv.DictReader(input)
 
         # collect vehicle strings from input
@@ -426,7 +412,6 @@ if __name__ == "__main__":
         process()
         err_vehicle.close()
         err_resource.close()
-        # print("Good Job!")
         output_check.check()
     except Exception as e:
         err_vehicle.close()
