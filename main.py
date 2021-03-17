@@ -274,9 +274,10 @@ def get_colors(vehicles):
 
 
 @animation.wait(animation='spinner', text='\nCollecting image urls ')
-def get_resource_urls(vehicles):
+def get_resource_urls(vehicles: list, resolution: int):
     for v in vehicles:
         year = int(v.year)
+        # TODO: code to select productTypeId based on resolution as well
         if year < 2007:
             v.productTypeId = '235'
         else:
@@ -376,43 +377,32 @@ def get_vehicle_matches(vehicles):
         key = (fetch[1]['year'], fetch[1]['make'])
         vehicle_lookup[key] = vifnum_results[index]
         index += 1
-        
-    # lst = vehicle_lookup[("2002", "Ford")]['data']
-    # for result in lst:
-    #     print(result['vehicle_str'])
 
     cached_matches = {}  # (year, make, model) --> vifnum of best match 
     for v in vehicles:
 
         key = v.payload.values()
+        # found this match previously
         if key in cached_matches:
             if cached_matches[key] is not  None:
-                # print(f"No cached_match for {v.string}, | {v.payload}", file=err_vehicle)
-            # else:
-                # print("cached_match = ", cached_matches[key])
                 v.vifnum = cached_matches[key]
         else:
             # one or more matches
             if vehicle_lookup[(v.year, v.make)]['statusCode'] == 200:
                 vifnum = get_best_match(v, vehicle_lookup[(v.year, v.make)]['data'])
-                # if vifnum is None:
-                #     print(f"get_best_match() returned None for {v.payload}")
-                #     exit(1)
                 cached_matches[key] = vifnum
                 v.vifnum = vifnum
-                # print(f"cached_match[{key}] =", cached_matches[key])
                 assert(cached_matches[key] == vifnum)
-                # print("return from get_best_match(), saved vifnum as ", v.vifnum)
             # no matches
             elif vehicle_lookup[(v.year, v.make)]['statusCode'] == 404:
                 cached_matches[key] = None
                 print(f"404 no matches: {v.string}, | {v.payload}", file=err_vehicle)
-        # print("End of for loop, vifnum = ", v.vifnum)
 
 
-def process():
+def process(input_file: str, target_folder: str, resolution: int):
     t = datetime.now()
     print(f"start: {t}")
+    file = 'data/' + input_file
     with open(config.input_file, 'r') as input:
         reader = csv.DictReader(input)
 
@@ -447,7 +437,7 @@ def process():
                 else:
                     uncaught_misses[v.string] = 1
                     uncaught_miss_count += 1
-                
+
         print(f"{uncaught_miss_count}/{len(eligible_vehicles)} checked vehicles do not have matches in database.",
                 "See err_vehicle.txt for details.")
 
@@ -460,7 +450,7 @@ def process():
 
         # pull colors, urls, and select url w/preferred color
         get_colors(eligible_vehicles)
-        get_resource_urls(eligible_vehicles)
+        get_resource_urls(eligible_vehicles, resolution)
         [select_resources(v) for v in eligible_vehicles]
 
         # make all images
@@ -483,7 +473,6 @@ def process():
                 print(f"{customer} : {customer_stats[customer][0]}/{customer_stats[customer][1]} vehicles are silhouettes.", file=err_customer)
                 print(f"{customer} : {customer_stats[customer][0]}/{customer_stats[customer][1]} vehicles are silhouettes.")
 
-
         tasks = [(v.selected_resource, v.vin) for v in vehicles]
         print("\n")
         expected_time = round(len(tasks) / 500) * 4
@@ -491,20 +480,20 @@ def process():
         txt = f"Starting download for {len(tasks)} images [{now.hour}:{now.minute}:{now.second}]. Expected wait: {expected_time}s"
         wait = animation.Wait(animation='bar', text=txt)
         wait.start()
-        asyncio.run(process_image.download_all(tasks))
+        asyncio.run(process_image.download_all(tasks, target_folder))
         wait.stop()
-        
+
         now = datetime.now()
         delta = now - t
         print(f"Downloads complete [{now.hour}:{now.minute}:{now.second}].\n> Total program runtime = {delta}")
 
 
-if __name__ == "__main__":
+def run(input_file: str, target_folder: str,resolution: int):
     try:
         err_customer = open('customer_miss.txt', 'w')
         err_vehicle = open('err_vehicle.txt', 'w')
         err_resource = open('err_resource.txt', 'w')
-        process()
+        process(input_file, target_folder, resolution)
         err_vehicle.close()
         err_resource.close()
         output_check.check()

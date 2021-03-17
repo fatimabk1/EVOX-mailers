@@ -4,10 +4,11 @@ import aiohttp
 import aiofiles
 import config
 import resource
+import os
 
 # ------------------------------------------------------------------- ASYNCHRONOUS IMAGE DOWNLOADING
-async def download_image(url: str, image_name: str, session):
-    save_path = 'images/' + image_name + '.jpg'
+async def download_image(target_folder: str, url: str, image_name: str, session):
+    save_path = os.path.join(target_folder, image_name + '.jpg')
     retry_count = 0
     while True:
         try:
@@ -39,12 +40,12 @@ async def download_image(url: str, image_name: str, session):
                 print(e)
                 exit(1)
 
-async def bound_download(sem, url, image_name, session):
+async def bound_download(sem, target_folder, url, image_name, session):
     async with sem:
-        await download_image(url, image_name, session)
+        await download_image(url, target_folder,image_name, session)
 
 
-async def download_all(fetches: list):
+async def download_all(fetches: list, target_folder: str):
     # increase file limit to avoid OS ERROR too many open files
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     resource.setrlimit(resource.RLIMIT_NOFILE, (3000, hard))
@@ -54,6 +55,6 @@ async def download_all(fetches: list):
     tasks = []
     async with aiohttp.ClientSession(connector=conn) as session:
         for fetch in fetches:
-            t = asyncio.create_task(bound_download(sem, fetch[0], fetch[1], session))
+            t = asyncio.create_task(bound_download(sem, target_folder, fetch[0], fetch[1], session))
             tasks.append(t)
         await asyncio.gather(*tasks)
