@@ -246,7 +246,7 @@ def get_colors(vehicles):
 
     fetches = [[base + '/vehicles/' + str(vifnum) + '/colors', None]
                 for vifnum in seen]
-    color_results = asyncio.run(clientFetch.fetch_all(fetches))
+    color_results = asyncio.run(clientFetch.sem_fetch_all(fetches))
 
     color_lookup = {}
     for result in color_results:
@@ -289,7 +289,7 @@ def get_resource_urls(vehicles):
 
     fetches = [[base + '/vehicles/' + str(tpl[0]) + '/products/29/' + str(tpl[1]), None] 
                 for tpl in seen]
-    resource_results = asyncio.run(clientFetch.fetch_all(fetches))
+    resource_results = asyncio.run(clientFetch.sem_fetch_all(fetches))
     resource_lookup = {}
     for result in resource_results:
         vifnum, typeId = str(result['vehicle']['vifnum']), str(result['product']['product_type_id'])
@@ -368,7 +368,7 @@ def get_vehicle_matches(vehicles):
             continue
         else:
             fetches.append([url, {'year': v.year, 'make': v.make}])
-    vifnum_results = asyncio.run(clientFetch.fetch_all(fetches))
+    vifnum_results = asyncio.run(clientFetch.sem_fetch_all(fetches))
 
     vehicle_lookup = {}  # (year, make) --> vehicle results
     index = 0
