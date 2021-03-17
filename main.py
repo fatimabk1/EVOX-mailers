@@ -15,7 +15,7 @@ err_resource = open('err_resource.txt', 'w')
 
 
 class Vehicle:
-    def __init__(self, vin, string, position):
+    def __init__(self, vin, string, position, customer):
         self.position = position
         self.vin = vin
         self.string = string
@@ -28,12 +28,20 @@ class Vehicle:
         self.code_to_color = {}
         self.resources = None
         self.selected_resource = None
+        self.customer = customer
     
 def get_best_match(vehicle, match_list):
+    vifnum = None
+    if match_list is None:
+        return None
+        # print("BEST MATCH - no match_list given", vehicle.payload)
+
     if match_list is not None:
         best_match = None
         best_count = 0
+        # print(f"\nmatching for {vehicle.string}")
         for match in match_list:
+            # print("\t> testing ", match['vehicle_str'])
             match_str = match['vehicle_str'].lower()
             count = 0
             for tok in vehicle.model:
@@ -42,9 +50,14 @@ def get_best_match(vehicle, match_list):
             if count > best_count:
                 best_count = count
                 best_match = match
-        if best_count == len(vehicle.model):
+        # if best_count == len(vehicle.model):
+        if best_count > 0:
+            # print("\t\t> SELECTED: ", best_match['vehicle_str'])
             return best_match['vifnum']
-    return None
+        else:
+            pass
+            # print(f"BEST MATCH FAIL: {vehicle.string} | {vehicle.payload}", file=err_vehicle)
+    return vifnum
 
 
 def get_payload(vehicle, makes):   
@@ -225,27 +238,39 @@ def get_payload(vehicle, makes):
 
 @animation.wait(animation='spinner', text='\nCollecting color options ')
 def get_colors(vehicles):
-    fetches = [[base + '/vehicles/' + str(v.vifnum) + '/colors', None]
-                for v in vehicles
-                if v.vifnum is not None]
+    # set of unique color fetches (no redundancy)
+    seen = []
+    [seen.append(v.vifnum)
+    for v in vehicles
+    if v.vifnum is not None and v.vifnum not in seen]
+
+    fetches = [[base + '/vehicles/' + str(vifnum) + '/colors', None]
+                for vifnum in seen]
     color_results = asyncio.run(clientFetch.fetch_all(fetches))
+
+    color_lookup = {}
+    for result in color_results:
+        # print(result)
+        vifnum = result['data']['colors'][0]['vifnum']
+        color_lookup[vifnum] = result['data']['colors']
+    
+    # print(len(color_results))
+    assert(len(color_results) > 1)
 
     index = 0
     color_pool = ['White', 'Silver', 'Blue', 'Black', 'Gray']
     for v in vehicles:
         if v.vifnum is None:
             continue
-        if 'data' not in color_results[index]:
-            print("ERROR: missing data in color_results")
-            exit(1)
-        colors = color_results[index]['data']['colors']
-        for item in colors:
-            clr = item['simpletitle']
-            # save codes of preferred colors
-            if clr in color_pool:
-                v.code_to_color[item['code']] = clr
-        v.code_len = len(colors[0]['code'])
-        index += 1
+        else:
+            colors = color_lookup[v.vifnum]
+            for item in colors:
+                clr = item['simpletitle']
+                # save codes of preferred colors
+                if clr in color_pool:
+                    v.code_to_color[item['code']] = clr
+            v.code_len = len(colors[0]['code'])
+            index += 1
 
 
 @animation.wait(animation='spinner', text='\nCollecting image urls ')
@@ -257,21 +282,34 @@ def get_resource_urls(vehicles):
         else:
             v.productTypeId = '237'
 
-    fetches = [[base + '/vehicles/' + str(v.vifnum) + '/products/29/' + str(v.productTypeId), None] 
-                for v in vehicles
-                if v.vifnum is not None]
+    seen = []
+    [seen.append((v.vifnum, v.productTypeId))
+    for v in vehicles
+    if v.vifnum is not None and (v.vifnum, v.productTypeId) not in seen]
+
+    fetches = [[base + '/vehicles/' + str(tpl[0]) + '/products/29/' + str(tpl[1]), None] 
+                for tpl in seen]
     resource_results = asyncio.run(clientFetch.fetch_all(fetches))
+    resource_lookup = {}
+    for result in resource_results:
+        vifnum, typeId = str(result['vehicle']['vifnum']), str(result['product']['product_type_id'])
+        # print(f"\tadding key: {vifnum} --> {type(vifnum)}, {typeId} --> {type(typeId)}")
+        resource_lookup[(vifnum, typeId)] = result['urls']
+
+    # assert(len(resource_results) > 4000)
 
     index = 0
+    count = 0
     for vehicle in vehicles:
         if vehicle.vifnum is None:
+            count +=1 
             continue
         else:
-            if resource_results[index]['status'] != "success":
-                print(v.string, " | ", v.payload, " | ", v.vifnum, file=err_resource)
-            else:
-                vehicle.resources = resource_results[index]['urls']
+            # print(f"{vehicle.vifnum} --> {type(vifnum)}, {vehicle.productTypeId} --> {type(typeId)}")
+            vehicle.resources = resource_lookup[(str(vehicle.vifnum), vehicle.productTypeId)]
             index += 1
+    print(count, "vehicles with no vifnum")
+
 
 def select_resources(vehicle):
     if vehicle.resources is None:
@@ -302,6 +340,7 @@ def select_resources(vehicle):
     # assign random colored image if preferred colors unavailable
     if vehicle.selected_resource is None:
         vehicle.selected_resource = resource_urls[0]
+        print(f"selecting random image color: {vehicle.string} | {vehicle.payload}")
 
 
 def get_makes():
@@ -331,34 +370,50 @@ def get_vehicle_matches(vehicles):
             fetches.append([url, {'year': v.year, 'make': v.make}])
     vifnum_results = asyncio.run(clientFetch.fetch_all(fetches))
 
-    vehicle_lookup = {}
+    vehicle_lookup = {}  # (year, make) --> vehicle results
     index = 0
     for fetch in fetches:
         key = (fetch[1]['year'], fetch[1]['make'])
         vehicle_lookup[key] = vifnum_results[index]
         index += 1
-
+        
+    # lst = vehicle_lookup[("2002", "Ford")]['data']
+    # for result in lst:
+    #     print(result['vehicle_str'])
 
     cached_matches = {}  # (year, make, model) --> vifnum of best match 
-    for index, result in enumerate(vifnum_results):
-        v = vehicles[index]
-        key = tuple([v.year, v.make, ' '.join(v.model)])
+    for v in vehicles:
+
+        key = v.payload.values()
         if key in cached_matches:
-            v.vifnum = cached_matches[key]
+            if cached_matches[key] is not  None:
+                # print(f"No cached_match for {v.string}, | {v.payload}", file=err_vehicle)
+            # else:
+                # print("cached_match = ", cached_matches[key])
+                v.vifnum = cached_matches[key]
         else:
             # one or more matches
-            if result['statusCode'] == 200:
+            if vehicle_lookup[(v.year, v.make)]['statusCode'] == 200:
                 vifnum = get_best_match(v, vehicle_lookup[(v.year, v.make)]['data'])
+                # if vifnum is None:
+                #     print(f"get_best_match() returned None for {v.payload}")
+                #     exit(1)
                 cached_matches[key] = vifnum
                 v.vifnum = vifnum
+                # print(f"cached_match[{key}] =", cached_matches[key])
+                assert(cached_matches[key] == vifnum)
+                # print("return from get_best_match(), saved vifnum as ", v.vifnum)
             # no matches
-            elif result['statusCode'] == 404:
+            elif vehicle_lookup[(v.year, v.make)]['statusCode'] == 404:
                 cached_matches[key] = None
+                print(f"404 no matches: {v.string}, | {v.payload}", file=err_vehicle)
+        # print("End of for loop, vifnum = ", v.vifnum)
 
 
 def process():
     t = datetime.now()
-    with open('data/data.csv', 'r') as input:
+    print(f"start: {t}")
+    with open(config.input_file, 'r') as input:
         reader = csv.DictReader(input)
 
         # collect vehicle strings from input
@@ -368,7 +423,7 @@ def process():
                 vin = "VIN{}".format(i + 1)
                 vehicle = "Vehicle{}".format(i + 1)
                 if row[vin]:
-                    v = Vehicle(row[vin], row[vehicle], i + 1)
+                    v = Vehicle(row[vin], row[vehicle], i + 1, row["ControlNum"])
                     vehicles.append(v)
 
         # extract year, make, model from vehicle string
@@ -376,11 +431,32 @@ def process():
         [get_payload(v, makes) for v in vehicles]  
 
         # Assign vifnums & cache db vehicle data as we go
-        wait = animation.Wait(animation='bar', text='\nSearching for vehicle matches ')
-        wait.start()
+        # wait = animation.Wait(animation='bar', text='\nSearching for vehicle matches ')
+        # wait.start()
         eligible_vehicles = [v for v in vehicles if int(v.year) >= 2000] 
+        old_vehicle_count = len(vehicles) - len(eligible_vehicles)
+        print(f"{old_vehicle_count}/{len(vehicles)} vehicles are older than 2000 and not in EVOX database")
         get_vehicle_matches(eligible_vehicles)
-        wait.stop()
+        uncaught_miss_count = 0
+        uncaught_misses = {}
+        for v in eligible_vehicles:
+            if v.vifnum is None:
+                if v.string in uncaught_misses:
+                    uncaught_misses[v.string] += 1
+                    uncaught_miss_count += 1
+                else:
+                    uncaught_misses[v.string] = 1
+                    uncaught_miss_count += 1
+                
+        print(f"{uncaught_miss_count}/{len(eligible_vehicles)} checked vehicles do not have matches in database.",
+                "See err_vehicle.txt for details.")
+
+        print("\nDATABASE MISSES:", file=err_vehicle)
+        print("\nDATABASE MISSES:")
+        for miss in uncaught_misses:
+            print(miss, uncaught_misses[miss], file=err_vehicle)
+            print(miss, uncaught_misses[miss])
+        # wait.stop()
 
         # pull colors, urls, and select url w/preferred color
         get_colors(eligible_vehicles)
@@ -388,11 +464,28 @@ def process():
         [select_resources(v) for v in eligible_vehicles]
 
         # make all images
+        count = 0
+        customer_stats = {}
+        print("\n")
         for v in vehicles:
+            if v.customer not in customer_stats:
+                customer_stats[v.customer] = [0, 0]  # silhouttes, total vehicles
+            customer_stats[v.customer][1] += 1
             if v.selected_resource is None:
+                customer_stats[v.customer][0] += 1
                 v.selected_resource = 'silhouette.jpg'
-        tasks = [(v.selected_resource, v.vin) for v in vehicles]
+                # print(f"FOUND SILHOUETTE: {v.string} | {v.payload}", file=err_vehicle)
+                count += 1
 
+        print(f"silhouette count = {count}. See customer_miss.txt for breakdown by customer")
+        for customer in customer_stats:
+            if customer_stats[customer][0] > 0:
+                print(f"{customer} : {customer_stats[customer][0]}/{customer_stats[customer][1]} vehicles are silhouettes.", file=err_customer)
+                print(f"{customer} : {customer_stats[customer][0]}/{customer_stats[customer][1]} vehicles are silhouettes.")
+
+
+        tasks = [(v.selected_resource, v.vin) for v in vehicles]
+        print("\n")
         expected_time = round(len(tasks) / 500) * 4
         now = datetime.now()
         txt = f"Starting download for {len(tasks)} images [{now.hour}:{now.minute}:{now.second}]. Expected wait: {expected_time}s"
@@ -408,11 +501,15 @@ def process():
 
 if __name__ == "__main__":
     try:
+        err_customer = open('customer_miss.txt', 'w')
+        err_vehicle = open('err_vehicle.txt', 'w')
+        err_resource = open('err_resource.txt', 'w')
         process()
         err_vehicle.close()
         err_resource.close()
         output_check.check()
     except Exception as e:
+        err_customer.close()
         err_vehicle.close()
         err_resource.close()
         print("Process Failed.")

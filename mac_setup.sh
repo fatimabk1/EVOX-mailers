@@ -1,6 +1,8 @@
 #!/bin/bash
 python3 -m pip install --user --upgrade pip
-python3 -m venv mailers_env
-source mailers_env/bin/activate
+pip install virtualenvwrapper
+/bin/bash -c '/usr/local/bin/virtualenvwrapper.sh'
+/bin/bash -c '/usr/local/bin/virtualenvwrapper.sh mailers_env'
+/bin/bash -c 'workon mailers_env'
 python3 -m pip install -r requirements.txt
-source deactivate mailers_env
+/bin/bash -c 'deactivate'

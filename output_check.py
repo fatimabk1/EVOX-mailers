@@ -1,11 +1,12 @@
 import csv
 from os import listdir
 from os.path import isfile, join
+import config
 
 
 def check():
     success = True
-    with open('data/data.csv', 'r') as input:
+    with open(config.input_file, 'r') as input:
         reader = csv.DictReader(input)
 
         expected = []

@@ -39,12 +39,15 @@ async def fetch_all(fetches):
     async with ClientSession(connector=connector, headers=config.headers) as session:
         index = 0
         batches = [fetches[i:i + 1000] for i in range(0, len(fetches), 1000)]
+        start = datetime.now()
         for batch in batches:
             for fetch_task in batch:
                 t = asyncio.create_task(fetch(fetch_task[0], fetch_task[1], session))
                 tasks.append(t)
-            results.append(await asyncio.gather(*tasks))
+            results = results + (await asyncio.gather(*tasks))
             index += 1
+            delta = datetime.now() - start
+            print(f"Batch {index}/{len(batches)} complete in ∆{delta}")
         if len(results) == 1:
             return results[0]
         return results       
