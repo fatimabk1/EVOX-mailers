@@ -7,7 +7,7 @@ import resource
 import os
 
 # ------------------------------------------------------------------- ASYNCHRONOUS IMAGE DOWNLOADING
-async def download_image(target_folder: str, url: str, image_name: str, session):
+async def download_image(target_folder, url, image_name, session):
     save_path = os.path.join(target_folder, image_name + '.jpg')
     retry_count = 0
     while True:
@@ -42,7 +42,7 @@ async def download_image(target_folder: str, url: str, image_name: str, session)
 
 async def bound_download(sem, target_folder, url, image_name, session):
     async with sem:
-        await download_image(url, target_folder,image_name, session)
+        await download_image(target_folder, url,image_name, session)
 
 
 async def download_all(fetches: list, target_folder: str):

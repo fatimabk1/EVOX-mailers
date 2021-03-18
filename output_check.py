@@ -1,12 +1,11 @@
 import csv
 from os import listdir
 from os.path import isfile, join
-import config
 
 
-def check():
+def check(input_file, target_folder):
     success = True
-    with open(config.input_file, 'r') as input:
+    with open(input_file, 'r') as input:
         reader = csv.DictReader(input)
 
         expected = []
@@ -18,7 +17,7 @@ def check():
             if row["VIN3"]:
                 expected.append(row["VIN3"] + ".jpg")
 
-        actual = [img for img in listdir("images/") if isfile(join("images/", img)) and img != '.DS_Store']
+        actual = [img for img in listdir(target_folder) if isfile(join(target_folder, img)) and img != '.DS_Store']
         expected_count = len(expected)
         actual_count = len(actual)
 

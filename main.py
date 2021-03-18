@@ -7,12 +7,11 @@ import config
 import clientFetch
 import output_check
 import process_image
-import animation
+import json
+import os
+import pathlib
 
 base = 'http://api.evoximages.com/api/v1'
-err_vehicle = open('err_vehicle.txt', 'w')
-err_resource = open('err_resource.txt', 'w')
-
 
 class Vehicle:
     def __init__(self, vin, string, position, customer):
@@ -34,14 +33,11 @@ def get_best_match(vehicle, match_list):
     vifnum = None
     if match_list is None:
         return None
-        # print("BEST MATCH - no match_list given", vehicle.payload)
 
     if match_list is not None:
         best_match = None
         best_count = 0
-        # print(f"\nmatching for {vehicle.string}")
         for match in match_list:
-            # print("\t> testing ", match['vehicle_str'])
             match_str = match['vehicle_str'].lower()
             count = 0
             for tok in vehicle.model:
@@ -50,17 +46,12 @@ def get_best_match(vehicle, match_list):
             if count > best_count:
                 best_count = count
                 best_match = match
-        # if best_count == len(vehicle.model):
         if best_count > 0:
-            # print("\t\t> SELECTED: ", best_match['vehicle_str'])
             return best_match['vifnum']
-        else:
-            pass
-            # print(f"BEST MATCH FAIL: {vehicle.string} | {vehicle.payload}", file=err_vehicle)
     return vifnum
 
 
-def get_payload(vehicle, makes):   
+def get_payload(vehicle, makes, err_vehicle):   
     string = vehicle.string
     tokens = str.split(string)
     year = tokens[0]
@@ -125,7 +116,7 @@ def get_payload(vehicle, makes):
     
     # MERCEDES BENZ
     elif model_string == "Sl 63 Amg":
-        model = "S-Class S63 AMG"
+        model = "SL-Class"
     elif model_string == "Gl 550 4Matic":
         model = "GL-Class GL550"
     elif model_string == "E 350 Luxury":
@@ -138,7 +129,7 @@ def get_payload(vehicle, makes):
         model = "C-Class C300"
     elif model_string == "C 250 Luxury":
         model = "C-Class C250"
-    elif model_string == "E 320 Bluetec":
+    elif model_string == "E '320' Bluetec":
         model = "E-Class"
     elif model_string == "C 300 Sport":
         model = "C-Class C300"
@@ -190,7 +181,7 @@ def get_payload(vehicle, makes):
     elif model_string == "325Ci":
         model = "3-series 325i"
     elif model_string == "750I Xdrive":
-        model = "xDrive"
+        model = "7-series 750"
     elif model_string == "528I":
         model = "5-series 528"
     elif model_string == "750Li":
@@ -236,8 +227,8 @@ def get_payload(vehicle, makes):
                        'model': model_toks}
 
 
-@animation.wait(animation='spinner', text='\nCollecting color options ')
 def get_colors(vehicles):
+    print("\nCollecting color options. Please wait ...")
     # set of unique color fetches (no redundancy)
     seen = []
     [seen.append(v.vifnum)
@@ -273,15 +264,40 @@ def get_colors(vehicles):
             index += 1
 
 
-@animation.wait(animation='spinner', text='\nCollecting image urls ')
 def get_resource_urls(vehicles: list, resolution: int):
+    print('\nCollecting image urls. Please wait... ')
     for v in vehicles:
         year = int(v.year)
-        # TODO: code to select productTypeId based on resolution as well
+
+        # only angle 001 available
         if year < 2007:
-            v.productTypeId = '235'
+            # v.productTypeId = 235
+            if resolution == '320':
+                v.productTypeId = 232
+            elif resolution == '480':
+                v.productTypeId = 235
+            elif resolution == '640':
+                v.productTypeId = 238
+            elif resolution == '1280':
+                v.productTypeId = 244
+            elif resolution == '2400':
+                v.productTypeId = 247
+        # angle 032
         else:
-            v.productTypeId = '237'
+            # v.productTypeId = 237
+            if resolution == '320':
+                v.productTypeId = 234
+            elif resolution == '480':
+                v.productTypeId = 237
+            elif resolution == '640':
+                v.productTypeId = 242
+            elif resolution == '1280':
+                v.productTypeId = 246
+            elif resolution == '2400':
+                v.productTypeId = 251
+        if v.productTypeId is None:
+            print(f"\t> ERROR: vehicle missing productTypeId")
+            exit(1)
 
     seen = []
     [seen.append((v.vifnum, v.productTypeId))
@@ -293,11 +309,9 @@ def get_resource_urls(vehicles: list, resolution: int):
     resource_results = asyncio.run(clientFetch.sem_fetch_all(fetches))
     resource_lookup = {}
     for result in resource_results:
+        # print(json.dumps(result, indent=4))
         vifnum, typeId = str(result['vehicle']['vifnum']), str(result['product']['product_type_id'])
-        # print(f"\tadding key: {vifnum} --> {type(vifnum)}, {typeId} --> {type(typeId)}")
         resource_lookup[(vifnum, typeId)] = result['urls']
-
-    # assert(len(resource_results) > 4000)
 
     index = 0
     count = 0
@@ -306,13 +320,13 @@ def get_resource_urls(vehicles: list, resolution: int):
             count +=1 
             continue
         else:
-            # print(f"{vehicle.vifnum} --> {type(vifnum)}, {vehicle.productTypeId} --> {type(typeId)}")
-            vehicle.resources = resource_lookup[(str(vehicle.vifnum), vehicle.productTypeId)]
+            vehicle.resources = resource_lookup[(str(vehicle.vifnum), str(vehicle.productTypeId))]
             index += 1
     print(count, "vehicles with no vifnum")
 
 
-def select_resources(vehicle):
+def select_resources(vehicle, err):
+    err_color = err[2]
     if vehicle.resources is None:
         return
 
@@ -341,7 +355,7 @@ def select_resources(vehicle):
     # assign random colored image if preferred colors unavailable
     if vehicle.selected_resource is None:
         vehicle.selected_resource = resource_urls[0]
-        print(f"selecting random image color: {vehicle.string} | {vehicle.payload}")
+        print(f"\t> selecting random image color: {vehicle.string} | {vehicle.payload}", file=err_color)
 
 
 def get_makes():
@@ -355,13 +369,14 @@ def get_makes():
             retry_count += 1
             if retry_count == 5:
                 print("FAILURE: get_makes() server error")
+                print(r, r.text)
                 exit(1)
 
     makes = r.json()['data']
     return makes
 
 
-def get_vehicle_matches(vehicles):
+def get_vehicle_matches(vehicles, err_vehicle):
     url = base + '/vehicles'
     fetches = []
     for v in vehicles:
@@ -399,11 +414,12 @@ def get_vehicle_matches(vehicles):
                 print(f"404 no matches: {v.string}, | {v.payload}", file=err_vehicle)
 
 
-def process(input_file: str, target_folder: str, resolution: int):
+def process(input_file: str, target_folder: str, resolution: int, err):
+    err_vehicle, err_customer = err[0], err[1]
+
     t = datetime.now()
     print(f"start: {t}")
-    file = 'data/' + input_file
-    with open(config.input_file, 'r') as input:
+    with open(input_file, 'r') as input:
         reader = csv.DictReader(input)
 
         # collect vehicle strings from input
@@ -418,15 +434,14 @@ def process(input_file: str, target_folder: str, resolution: int):
 
         # extract year, make, model from vehicle string
         makes = get_makes()
-        [get_payload(v, makes) for v in vehicles]  
+        [get_payload(v, makes, err_vehicle) for v in vehicles]  
 
         # Assign vifnums & cache db vehicle data as we go
-        # wait = animation.Wait(animation='bar', text='\nSearching for vehicle matches ')
-        # wait.start()
+        print('\nSearching for vehicle matches. Please wait ...')
         eligible_vehicles = [v for v in vehicles if int(v.year) >= 2000] 
         old_vehicle_count = len(vehicles) - len(eligible_vehicles)
         print(f"{old_vehicle_count}/{len(vehicles)} vehicles are older than 2000 and not in EVOX database")
-        get_vehicle_matches(eligible_vehicles)
+        get_vehicle_matches(eligible_vehicles, err[0])
         uncaught_miss_count = 0
         uncaught_misses = {}
         for v in eligible_vehicles:
@@ -438,20 +453,18 @@ def process(input_file: str, target_folder: str, resolution: int):
                     uncaught_misses[v.string] = 1
                     uncaught_miss_count += 1
 
-        print(f"{uncaught_miss_count}/{len(eligible_vehicles)} checked vehicles do not have matches in database.",
-                "See err_vehicle.txt for details.")
-
-        print("\nDATABASE MISSES:", file=err_vehicle)
-        print("\nDATABASE MISSES:")
-        for miss in uncaught_misses:
-            print(miss, uncaught_misses[miss], file=err_vehicle)
-            print(miss, uncaught_misses[miss])
-        # wait.stop()
+        if uncaught_miss_count > 0:
+            print(f"{uncaught_miss_count}/{len(eligible_vehicles)} checked vehicles do not have matches in database.",
+                    "See err_vehicle.txt for details.")
+            print("\nDATABASE MISSES:", file=err_vehicle)
+            for miss in uncaught_misses:
+                print(miss, uncaught_misses[miss], file=err_vehicle)
 
         # pull colors, urls, and select url w/preferred color
         get_colors(eligible_vehicles)
         get_resource_urls(eligible_vehicles, resolution)
-        [select_resources(v) for v in eligible_vehicles]
+        print("Vehicles missing preferred colors:", file=err[2])
+        [select_resources(v, err) for v in eligible_vehicles]
 
         # make all images
         count = 0
@@ -464,24 +477,21 @@ def process(input_file: str, target_folder: str, resolution: int):
             if v.selected_resource is None:
                 customer_stats[v.customer][0] += 1
                 v.selected_resource = 'silhouette.jpg'
-                # print(f"FOUND SILHOUETTE: {v.string} | {v.payload}", file=err_vehicle)
                 count += 1
 
         print(f"silhouette count = {count}. See customer_miss.txt for breakdown by customer")
         for customer in customer_stats:
             if customer_stats[customer][0] > 0:
                 print(f"{customer} : {customer_stats[customer][0]}/{customer_stats[customer][1]} vehicles are silhouettes.", file=err_customer)
-                print(f"{customer} : {customer_stats[customer][0]}/{customer_stats[customer][1]} vehicles are silhouettes.")
 
         tasks = [(v.selected_resource, v.vin) for v in vehicles]
         print("\n")
         expected_time = round(len(tasks) / 500) * 4
         now = datetime.now()
         txt = f"Starting download for {len(tasks)} images [{now.hour}:{now.minute}:{now.second}]. Expected wait: {expected_time}s"
-        wait = animation.Wait(animation='bar', text=txt)
-        wait.start()
+
+        print(txt)
         asyncio.run(process_image.download_all(tasks, target_folder))
-        wait.stop()
 
         now = datetime.now()
         delta = now - t
@@ -489,18 +499,32 @@ def process(input_file: str, target_folder: str, resolution: int):
 
 
 def run(input_file: str, target_folder: str,resolution: int):
+    # one_vehicle.run(resolution)
+
     try:
-        err_customer = open('customer_miss.txt', 'w')
-        err_vehicle = open('err_vehicle.txt', 'w')
-        err_resource = open('err_resource.txt', 'w')
-        process(input_file, target_folder, resolution)
-        err_vehicle.close()
-        err_resource.close()
-        output_check.check()
+        # create image folder within target directory named images_{date}
+        now = str(datetime.now())
+        image_dir_path = os.path.join(target_folder, 'images' + now)
+        pathlib.Path(image_dir_path).mkdir(parents=True, exist_ok=True)
+    
+        # create output folder within target directory named stats_{}
+        log_dir_path = os.path.join(target_folder, 'logs' + now)
+        pathlib.Path(log_dir_path).mkdir(parents=True, exist_ok=True)
+
+        # open error log files
+        path = os.path.join(log_dir_path, 'err_customer.txt')
+        err_customer = open(path, 'w')
+        path = os.path.join(log_dir_path, 'err_vehicle.txt')
+        err_vehicle = open(path, 'w')
+        path = os.path.join(log_dir_path, 'err_color.txt')
+        err_color = open(path, 'w')
+    
+        err = [err_vehicle, err_customer, err_color]
+        process(input_file, image_dir_path, resolution, err)
+        [f.close() for f in err]
+        output_check.check(input_file, image_dir_path)
+
     except Exception as e:
-        err_customer.close()
-        err_vehicle.close()
-        err_resource.close()
         print("Process Failed.")
         traceback.print_exc()
         print(e)

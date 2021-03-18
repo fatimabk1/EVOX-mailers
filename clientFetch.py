@@ -16,6 +16,8 @@ async def fetch(url, params, session):
         
         # handle errors
         if response.status == 200 or response.status == 404:
+            if response.status == 400 and params is None:
+                print(f"{url}", await response.json())
             result = await response.json()
             break
         else:
@@ -59,8 +61,6 @@ async def sem_fetch_all(fetches):
     results = []
     sem = asyncio.Semaphore(1500)
     async with ClientSession(connector=connector, headers=config.headers) as session:
-        # batches = [fetches[i:i + 1000] for i in range(0, len(fetches), 1000)]
-        # index = 0
         start = datetime.now()
         for fetch_task in fetches:
             t = asyncio.create_task(bound_fetch(sem, fetch_task[0], fetch_task[1], session))
@@ -68,14 +68,4 @@ async def sem_fetch_all(fetches):
         results = await asyncio.gather(*tasks)
         delta = datetime.now() - start
         print(f"All {len(fetches)} fetches complete in ∆{delta}")
-        # for batch in batches:
-        #     for fetch_task in batch:
-        #         t = asyncio.create_task(bound_fetch(sem, fetch_task[0], fetch_task[1], session))
-        #         tasks.append(t)
-        #     results = results + (await asyncio.gather(*tasks))
-        #     index += 1
-        #     delta = datetime.now() - start
-        #     print(f"Batch {index}/{len(batches)} complete in ∆{delta}")
-        # if len(results) == 1:
-        #     return results[0]
         return results 
