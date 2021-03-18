@@ -1,6 +1,2 @@
 config.py
-/data/*.csv
-/images/*.jpg
-silhouette.jpg
 mailers.code-workspace
-images.zip
