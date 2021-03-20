@@ -1,10 +1,8 @@
-import csv
-import traceback
-import PySimpleGUI as sg
 import os
-import main
-import time
 import sys
+import main
+import PySimpleGUI as sg
+
 
 sg.theme('Dark Blue 3')
 
@@ -45,7 +43,7 @@ elif event == "Submit":
     print("Target Folder:", target_folder)
     name, extension = os.path.splitext(path)
     if extension != ".csv":
-        sg.PopupError("Please submit a .CSV file")
+        sg.PopupError("Please submit a .CSV file", keep_on_top=True)
         window.close()
     else:
         print("\n"*2)
@@ -56,7 +54,7 @@ elif event == "Submit":
         print("> Please wait patiently. Process may take up to five minutes to complete.\n\n")
         print("*\n"*2)
         main.run(path, target_folder, resolution)
-        sg.popup('All downloads complete!')
+        sg.popup('All downloads complete!', size=(300,100), keep_on_top=True)
 
 
 event, values = window.read()

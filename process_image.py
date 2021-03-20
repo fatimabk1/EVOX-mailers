@@ -5,16 +5,18 @@ import aiofiles
 import config
 import resource
 import os
+import sys
 
 # ------------------------------------------------------------------- ASYNCHRONOUS IMAGE DOWNLOADING
 async def download_image(target_folder, url, image_name, session):
     save_path = os.path.join(target_folder, image_name + '.jpg')
+    cwd = sys._MEIPASS
     retry_count = 0
     while True:
         try:
             if url == "silhouette.jpg":
                 async with aiofiles.open(save_path, mode='wb') as f:
-                    async with aiofiles.open('silhouette.jpg', 'rb') as source:
+                    async with aiofiles.open(os.path.join(cwd, 'silhouette.jpg'), 'rb') as source:
                         await f.write(await source.read())
                         await f.close()
                         await source.close()
